@@ -40,6 +40,8 @@
          stat/1]).
 
 -export([set_retention_policy/3]).
+-export([add_replica/3,
+         delete_replica/3]).
 
 -include("rabbit.hrl").
 -include("amqqueue.hrl").
@@ -123,7 +125,7 @@ cancel(_, _, _, _, _) ->
 credit(_, _, _, _) ->
     ok.
 
-deliver(QSs, Delivery) ->
+deliver(_QSs, _Delivery) ->
     ok.
 
 dequeue(_, _, _, _) ->
@@ -174,6 +176,33 @@ set_retention_policy(Name, VHost, Policy) ->
                     ok
             end
     end.
+
+add_replica(VHost, Name, Node) ->
+    QName = rabbit_misc:r(VHost, queue, Name),
+    Fun = fun(Q) ->
+                  Conf = amqqueue:get_type_state(Q),
+                  Replicas = maps:get(replicas, Conf),
+                  case lists:member(Node, Replicas) of
+                      true ->
+                          Q;
+                      false ->
+                          {ok, Pid} = osiris_replica:start(Node, Conf),
+                          ReplicaPids = maps:get(replica_pids, Conf),
+                          Conf1 = maps:put(replica_pids, [Pid | ReplicaPids],
+                                           maps:put(replicas, [Node | Replicas], Conf)),
+                          amqqueue:set_type_state(Q, Conf1)
+                  end
+          end,
+    case rabbit_misc:execute_mnesia_transaction(
+           fun() -> rabbit_amqqueue:update(QName, Fun) end) of
+        not_found ->
+            {error, not_found};
+        _ ->
+            ok
+    end.
+
+delete_replica(_VHost, _Name, _Node) ->
+    ok.
 
 make_stream_conf(Node, Q) ->
     QName = amqqueue:get_name(Q),
