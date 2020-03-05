@@ -57,7 +57,7 @@
 -export([pid_of/1, pid_of/2]).
 -export([mark_local_durable_queues_stopped/1]).
 
--export([rebalance/3]).
+-export([rebalance/3, rebalance/4, get_rebalance_lock/1]).
 -export([collect_info_all/2]).
 
 -export([is_policy_applicable/2]).
@@ -514,14 +514,36 @@ not_found_or_absent_dirty(Name) ->
         {ok, Q}            -> {absent, Q, nodedown}
     end.
 
--spec rebalance('all' | 'quorum' | 'classic', binary(), binary()) ->
-                       {ok, [{node(), pos_integer()}]} | {error, term()}.
-rebalance(Type, VhostSpec, QueueSpec) ->
-    Id = {rebalance_queues, self()},
+-spec get_rebalance_lock(pid()) ->
+    {true, {rebalance_queues, pid()}} | false.
+get_rebalance_lock(Pid) when is_pid(Pid) ->
+    Id = {rebalance_queues, Pid},
     Nodes = [node()|nodes()],
     %% Note that we're not re-trying. We want to immediately know
     %% if a re-balance is taking place and stop accordingly.
-    maybe_rebalance(global:set_lock(Id, Nodes, 0), Id, Type, VhostSpec, QueueSpec).
+    case global:set_lock(Id, Nodes, 0) of
+        true ->
+            {true, Id};
+        false ->
+            false
+    end.
+
+-spec rebalance({rebalance_queues, pid()}, 'all' | 'quorum' | 'classic', binary(), binary()) ->
+    {ok, [{node(), pos_integer()}]} | {error, term()}.
+rebalance({rebalance_queues, Pid}=Id, Type, VhostSpec, QueueSpec) when is_pid(Pid) ->
+    %% We already have acquired the rebalance_queues global lock.
+    maybe_rebalance(true, Id, Type, VhostSpec, QueueSpec).
+
+-spec rebalance('all' | 'quorum' | 'classic', binary(), binary()) ->
+                       {ok, [{node(), pos_integer()}]} | {error, term()}.
+rebalance(Type, VhostSpec, QueueSpec) ->
+    %% We have not yet acquired the rebalance_queues global lock.
+    maybe_rebalance(get_rebalance_lock(self()), Type, VhostSpec, QueueSpec).
+
+maybe_rebalance({true, Id}, Type, VhostSpec, QueueSpec) ->
+    maybe_rebalance(true, Id, Type, VhostSpec, QueueSpec);
+maybe_rebalance(false, Type, VhostSpec, QueueSpec) ->
+    maybe_rebalance(false, undefined, Type, VhostSpec, QueueSpec).
 
 maybe_rebalance(true, Id, Type, VhostSpec, QueueSpec) ->
     Running = rabbit_mnesia:cluster_nodes(running),
