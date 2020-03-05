@@ -710,7 +710,7 @@ rebalance_multiple_blocked(Config) ->
     ?assertEqual(A, node(proplists:get_value(pid, find_queue(Q3, A)))),
     ?assertEqual(A, node(proplists:get_value(pid, find_queue(Q4, A)))),
     ?assertEqual(A, node(proplists:get_value(pid, find_queue(Q5, A)))),
-    {ok, _Summary} = rpc:call(A, rabbit_amqqueue, rebalance, [classic, ".*", ".*"]),
+    true = rpc:cast(A, rabbit_amqqueue, rebalance, [classic, ".*", ".*"]),
     {error, rebalance_in_progress} = rpc:call(A, rabbit_amqqueue, rebalance, [classic, ".*", ".*"]),
     ok.
 

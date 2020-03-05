@@ -515,8 +515,15 @@ not_found_or_absent_dirty(Name) ->
     end.
 
 -spec rebalance('all' | 'quorum' | 'classic', binary(), binary()) ->
-                       {ok, [{node(), pos_integer()}]}.
+                       {ok, [{node(), pos_integer()}]} | {error, term()}.
 rebalance(Type, VhostSpec, QueueSpec) ->
+    Id = {rebalance_queues, self()},
+    Nodes = [node()|nodes()],
+    %% Note that we're not re-trying. We want to immediately know
+    %% if a re-balance is taking place and stop accordingly.
+    maybe_rebalance(global:set_lock(Id, Nodes, 0), Id, Type, VhostSpec, QueueSpec).
+
+maybe_rebalance(true, Id, Type, VhostSpec, QueueSpec) ->
     Running = rabbit_mnesia:cluster_nodes(running),
     NumRunning = length(Running),
     ToRebalance = [Q || Q <- rabbit_amqqueue:list(),
@@ -527,11 +534,15 @@ rebalance(Type, VhostSpec, QueueSpec) ->
     NumToRebalance = length(ToRebalance),
     ByNode = group_by_node(ToRebalance),
     Rem = case (NumToRebalance rem NumRunning) of
-              0 -> 0;
-              _ -> 1
-          end,
+            0 -> 0;
+            _ -> 1
+        end,
     MaxQueuesDesired = (NumToRebalance div NumRunning) + Rem,
-    iterative_rebalance(ByNode, MaxQueuesDesired).
+    Result = iterative_rebalance(ByNode, MaxQueuesDesired),
+    global:del_lock(Id),
+    Result;
+maybe_rebalance(false, _Id, _Type, _VhostSpec, _QueueSpec) ->
+    {error, rebalance_in_progress}.
 
 filter_per_type(all, _) ->
     true;
